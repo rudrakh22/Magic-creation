@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CONVERTED
+}
+
+enum BookingStatus {
+  AWAITING_DEPOSIT
+  CONFIRMED
+  PICKED_UP
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentType {
+  DEPOSIT
+  BALANCE
+}
+
+enum PaymentStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  REFUNDED
+}
+
+enum InventoryMovementType {
+  RESERVE
+  RELEASE
+  SALE
+  RETURN
+  ADJUSTMENT
+}
+
+enum QrInvalidationReason {
+  PICKED_UP
+  CANCELLED
+  EXPIRED
+  REPLACED
+}
+
+enum PointEntryType {
+  CREDIT
+  REDEEM
+  EXPIRE
+  REVERSAL
+  ADJUSTMENT
+}
+
+enum PointSourceType {
+  CANCELLATION
+  APPROVED_RETURN
+  PROMOTION
+  REFERRAL
+  REVIEW
+  ADMIN_ADJUSTMENT
+}
+
+enum ReturnExchangeType {
+  RETURN
+  EXCHANGE
+}
+
+enum ReturnExchangeStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model UserProfile {
+  id          String   @id @default(cuid())
+  clerkUserId String   @unique
+  role        UserRole @default(CUSTOMER)
+  name        String?
+  phone       String?
+  email       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requests           ProductRequest[]    @relation("RequestCustomer")
+  bookings           Booking[]           @relation("BookingCustomer")
+  inventoryMovements InventoryMovement[] @relation("InventoryActor")
+  auditLogs          AuditLog[]          @relation("AuditActor")
+
+  @@index([role])
+}
+
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  category    String?
+  images      String[]  @default([])
+  active      Boolean   @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  variants ProductVariant[]
+
+  @@index([active, category])
+  @@index([deletedAt])
+}
+
+model ProductVariant {
+  id          String   @id @default(cuid())
+  productId   String
+  sku         String   @unique
+  size        String?
+  color       String?
+  attributes  Json?
+  pricePaise  Int
+  quantity    Int      @default(0)
+  reservedQty Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  product            Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  requestItems       ProductRequestItem[]
+  bookingItems       BookingItem[]
+  inventoryMovements InventoryMovement[]
+
+  @@index([productId, active])
+}
+
+model ProductRequest {
+  id         String        @id @default(cuid())
+  customerId String
+  status     RequestStatus @default(PENDING)
+  adminNote  String?
+  decidedAt  DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  customer UserProfile          @relation("RequestCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  items    ProductRequestItem[]
+  booking  Booking?
+
+  @@index([customerId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ProductRequestItem {
+  id                String @id @default(cuid())
+  requestId         String
+  variantId         String
+  requestedQuantity Int
+
+  request ProductRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([requestId, variantId])
+  @@index([variantId])
+}
+
+model Booking {
+  id                 String        @id @default(cuid())
+  customerId         String
+  requestId          String?       @unique
+  status             BookingStatus @default(AWAITING_DEPOSIT)
+  totalPaise         Int
+  depositDuePaise    Int
+  depositPaidPaise   Int           @default(0)
+  balanceDuePaise    Int
+  confirmedAt        DateTime?
+  pickupDeadline     DateTime?
+  pickedUpAt         DateTime?
+  returnDeadline     DateTime?
+  cancelledAt        DateTime?
+  expiredAt          DateTime?
+  cancellationReason String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  customer           UserProfile             @relation("BookingCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  request            ProductRequest?         @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  items              BookingItem[]
+  payments           Payment[]
+  qrToken            BookingQrToken?
+  inventoryMovements InventoryMovement[]
+  returnRequests     ReturnExchangeRequest[]
+
+  @@index([customerId, createdAt])
+  @@index([status, pickupDeadline])
+  @@index([status, pickedUpAt])
+}
+
+model BookingItem {
+  id              String @id @default(cuid())
+  bookingId       String
+  variantId       String
+  productName     String
+  skuSnapshot     String
+  variantSnapshot Json?
+  unitPricePaise  Int
+  quantity        Int
+  lineTotalPaise  Int
+
+  booking Booking        @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([bookingId])
+  @@index([variantId])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  bookingId         String
+  type              PaymentType
+  status            PaymentStatus @default(PENDING)
+  provider          String        @default("CASHFREE")
+  providerOrderId   String?       @unique
+  providerPaymentId String?       @unique
+  idempotencyKey    String        @unique
+  amountPaise       Int
+  currency          String        @default("INR")
+  paymentMethod     String?
+  providerReference String?
+  verifiedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@index([bookingId, status])
+  @@index([bookingId, type])
+}
+
+model WebhookEvent {
+  id               String    @id @default(cuid())
+  provider         String    @default("CASHFREE")
+  providerEventId  String    @unique
+  eventType        String
+  processingStatus String    @default("RECEIVED")
+  receivedAt       DateTime  @default(now())
+  processedAt      DateTime?
+  errorMessage     String?
+  payload          Json?
+
+  @@index([processingStatus, receivedAt])
+}
+
+model InventoryMovement {
+  id          String                @id @default(cuid())
+  variantId   String
+  bookingId   String?
+  actorId     String?
+  type        InventoryMovementType
+  quantity    Int
+  reason      String?
+  referenceId String?
+  createdAt   DateTime              @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  booking Booking?       @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  actor   UserProfile?   @relation("InventoryActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([variantId, createdAt])
+  @@index([bookingId])
+}
+
+model BookingQrToken {
+  id                 String                @id @default(cuid())
+  bookingId          String                @unique
+  tokenHash          String                @unique
+  issuedAt           DateTime              @default(now())
+  invalidatedAt      DateTime?
+  invalidationReason QrInvalidationReason?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+}
+
+model PointCreditLot {
+  id              String          @id @default(cuid())
+  customerId      String
+  sourceType      PointSourceType
+  sourceId        String
+  issuedPoints    Int
+  remainingPoints Int
+  issuedAt        DateTime        @default(now())
+  expiresAt       DateTime
+  createdAt       DateTime        @default(now())
+
+  entries PointLedgerEntry[]
+
+  @@unique([customerId, sourceType, sourceId])
+  @@index([customerId, expiresAt])
+}
+
+model PointLedgerEntry {
+  id             String         @id @default(cuid())
+  customerId     String
+  lotId          String?
+  type           PointEntryType
+  pointsDelta    Int
+  sourceType     String?
+  sourceId       String?
+  idempotencyKey String         @unique
+  reason         String?
+  actorId        String?
+  createdAt      DateTime       @default(now())
+
+  lot PointCreditLot? @relation(fields: [lotId], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt])
+  @@index([lotId])
+}
+
+model ReturnExchangeRequest {
+  id          String               @id @default(cuid())
+  bookingId   String
+  type        ReturnExchangeType
+  status      ReturnExchangeStatus @default(REQUESTED)
+  reason      String
+  adminNote   String?
+  requestedAt DateTime             @default(now())
+  decidedAt   DateTime?
+  completedAt DateTime?
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@index([bookingId, requestedAt])
+  @@index([status, requestedAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String
+  reason     String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  actor UserProfile? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model StoreSetting {
+  id                 String   @id @default(cuid())
+  bookingPercentage  Int      @default(10)
+  pickupWindowDays   Int      @default(7)
+  returnWindowDays   Int      @default(7)
+  pointsValidityDays Int      @default(30)
+  pointsPerRupee     Int      @default(1)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}

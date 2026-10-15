@@ -1,0 +1,16 @@
+﻿
+{
+  "name": "magic-creation",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/mobile",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev:mobile": "npm run start --workspace=mobile",
+    "dev:api": "npm run dev --workspace=api",
+    "build:api": "npm run build --workspace=api",
+    "typecheck:api": "npm run typecheck --workspace=api"
+  }
+}
